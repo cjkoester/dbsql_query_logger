@@ -1,23 +1,32 @@
 from delta.tables import DeltaTable
-from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.types import StructType, StructField, StringType, TimestampType, ArrayType, LongType, MapType, IntegerType, BooleanType
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType, LongType, MapType, IntegerType, BooleanType
 from datetime import datetime, timezone
 import time
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import QueryFilter
 from databricks.sdk.service.sql import TimeRange
 import pyspark.sql.functions as F
-import os
-from databricks.connect import DatabricksSession
 
-spark = DatabricksSession.builder.getOrCreate()
+spark = SparkSession.builder.getOrCreate()
 
 class QueryLogger:
+    """Gets DBSQL query history from Databricks API and upserts it to Delta Lake
+
+    Args:
+        catalog (str): Catalog name
+        schema (str): Schema name
+        table (str): Table name
+        pipeline_mode (str): If set to 'triggered', code will load data and exit. Otherwise it will load new data every 10 seconds. 
+        backfill_period (str): Controls how far back to look for the initial data load.
+        reset (str): If set to 'yes', the target table will be replaced.
+    """
+
     def __init__(self, catalog: str, schema: str, table: str, pipeline_mode: str, backfill_period: str, reset: str):
         self.catalog = catalog
         self.schema = schema
         self.table = table
-        self.pipeline_mode
+        self.pipeline_mode = pipeline_mode
         self.backfill_period = backfill_period
         self.reset = reset
 
@@ -80,13 +89,11 @@ class QueryLogger:
         ).collect()[0][0]
         end_time = datetime.now(tz=timezone.utc)
     
-        print(f'start_time: {start_time.strftime("%Y-%m-%d %H:%M:%S")}, end_time: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
+        print(f'API filter start time: {start_time.strftime("%Y-%m-%d %H:%M:%S")}, end time: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
         return start_time, end_time
     
-    def get_query_history(self, include_metrics: bool = False):
-        """Get DBSQL query history
-    
-        Gets DBSQL query history using the Databricks Python SDK
+    def get_query_history(self, start_time, end_time, include_metrics: bool = False):
+        """Gets DBSQL query history using the Databricks Python SDK
         https://docs.databricks.com/api/workspace/queryhistory/list
         
         Args:
@@ -143,7 +150,7 @@ class QueryLogger:
         
         return spark.createDataFrame(query_hist_list, df_schema)
     
-    def parse_query_history(query_hist_df):
+    def parse_query_history(self, query_hist_df):
         query_hist_parsed_df = (
             query_hist_df
             .withColumn("query_start_time", F.expr("to_timestamp(query_start_time_ms / 1000)"))
@@ -168,22 +175,11 @@ class QueryLogger:
         )
     
     def run(self):
-        """Run query logger
-    
-        Args:
-            spark (SparkSession): SparkSession for performing Spark operations
-            catalog (str): Catalog name
-            schema (str): Schema name
-            table (str): Table name
-            pipeline_mode (str): If set to 'triggered', code will load data and exit. Otherwise it will load new data every 10 seconds. 
-            backfill_period (str): Controls how far back to look for the initial data load.
-            reset (str): If set to 'yes', the target table will be replaced.
-        """
+        """Runs DBSQL query logger pipeline"""
     
         while True:
-            os.system('cls')
             start_time, end_time = self.get_time_filter()
-            query_hist_df = self.get_query_history(include_metrics=True)
+            query_hist_df = self.get_query_history(start_time, end_time, include_metrics=True)
             query_hist_parsed_df = self.parse_query_history(query_hist_df)
             self.load_query_history(query_hist_parsed_df, start_time)
             
@@ -191,5 +187,3 @@ class QueryLogger:
                 break
             
             time.sleep(10)
-
-

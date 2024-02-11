@@ -39,11 +39,6 @@ class QueryLogger:
     def create_target_table(self):
         """Create target Delta Lake table"""
     
-        if self.catalog != "hive_metastore":
-            spark.sql(f"create catalog if not exists {self.catalog}")
-        spark.sql(f"use catalog {self.catalog}")
-        spark.sql(f"create schema if not exists {self.catalog}")
-    
         create_tbl_stmt = (
             "create or replace table" if self.reset == "yes" else "create table if not exists"
         )
@@ -85,12 +80,28 @@ class QueryLogger:
         """Get time filters for query history API
         
         Returns:
-            tuple[int, int]: start and end time values in milliseconds since the epoch
-        """ 
+            tuple[datetime, datetime]: start and end timestamps
+        """
+
+        start_time_query = f"""
+            select
+              coalesce(
+                (
+                  select
+                    min(query_start_time) as min_start
+                  from
+                    {self.catalog}.{self.schema}.{self.table}
+                  where
+                    status in ('QUEUED', 'RUNNING')
+                ),
+                max(query_start_time),
+                current_date() - interval {self.backfill_period}
+              )
+            from
+              {self.catalog}.{self.schema}.{self.table}
+        """
         
-        start_time = spark.sql(
-            f"select coalesce(max(query_start_time), current_date() - interval {self.backfill_period}) from {self.catalog}.{self.schema}.{self.table}"
-        ).collect()[0][0]
+        start_time = spark.sql(start_time_query).collect()[0][0]
         end_time = datetime.now(tz=timezone.utc)
         
         self.log(f'API filter start time: {start_time.strftime("%Y-%m-%d %H:%M:%S")}, end time: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
@@ -122,7 +133,12 @@ class QueryLogger:
                 )
             )
         )
+
+        return query_hist_list
     
+    def create_dataframe(self, query_hist_list):
+        """Create dataframe from query history API response data"""
+
         query_hist_list = (i.as_dict() for i in query_hist_list)
         
         df_schema = StructType(
@@ -150,10 +166,7 @@ class QueryLogger:
             ]
         )
         
-        return spark.createDataFrame(query_hist_list, df_schema)
-    
-    def parse_query_history(self, query_hist_df):
-        """Parses raw data to make it friendlier. Unix timestamps are converted to datetime."""
+        query_hist_df = spark.createDataFrame(query_hist_list, df_schema)
 
         query_hist_parsed_df = (
             query_hist_df
@@ -201,9 +214,9 @@ class QueryLogger:
                 self.optimize()
             
             start_time, end_time = self.get_time_filter()
-            query_hist_df = self.get_query_history(start_time, end_time, include_metrics=True)
-            query_hist_parsed_df = self.parse_query_history(query_hist_df)
-            self.load_query_history(query_hist_parsed_df, start_time)
+            query_hist = self.get_query_history(start_time, end_time, include_metrics=True)
+            query_hist_df = self.create_dataframe(query_hist)
+            self.load_query_history(query_hist_df, start_time)
             
             if self.pipeline_mode == 'triggered':
                 self.optimize()

@@ -1,0 +1,17 @@
+[project]
+name = "dbsql_query_logger"
+version = "0.0.1"
+authors = [
+  { name="Chris Koester", email="chris.koester@databricks.com" },
+]
+description = "Gets DBSQL query history and writes it to a Delta Lake table"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/cjkoester/dbsql_query_logger"
+Issues = "https://github.com/cjkoester/dbsql_query_logger/issues"

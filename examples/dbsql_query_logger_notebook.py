@@ -16,7 +16,7 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
-from query_logger import QueryLogger
+from dbsql_query_logger import QueryLogger
 
 query_logger = QueryLogger(
     catalog = dbutils.widgets.get('catalog'),

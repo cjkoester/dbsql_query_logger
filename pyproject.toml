@@ -1,6 +1,9 @@
 [project]
 name = "dbsql_query_logger"
 version = "0.0.1"
+dependencies = [
+  "databricks-sdk == 0.18.0"
+]
 authors = [
   { name="Chris Koester", email="chris.koester@databricks.com" },
 ]

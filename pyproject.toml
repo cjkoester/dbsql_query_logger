@@ -1,9 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "dbsql_query_logger"
 version = "0.0.1"
 dependencies = [
   "databricks-sdk == 0.18.0"
 ]
+requires-python = ">=3.8"
 authors = [
   { name="Chris Koester", email="chris.koester@databricks.com" },
 ]
@@ -14,6 +19,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+dbsql_query_logger = "dbsql_query_logger:main"
 
 [project.urls]
 Homepage = "https://github.com/cjkoester/dbsql_query_logger"

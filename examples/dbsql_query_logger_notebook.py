@@ -28,4 +28,4 @@ query_logger = QueryLogger(
 )
 
 query_logger.create_target_table()
-query_logger.main()
+query_logger.run()

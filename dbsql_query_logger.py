@@ -1,13 +1,14 @@
+from datetime import datetime, timezone
+import time
 from delta.tables import DeltaTable
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, LongType, MapType, BooleanType
-from datetime import datetime, timezone
-import time
+import pyspark.sql.functions as F
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import QueryFilter
 from databricks.sdk.service.sql import TimeRange
-import pyspark.sql.functions as F
 import itertools
+import sys
 
 spark = SparkSession.builder.getOrCreate()
 
@@ -190,12 +191,12 @@ class QueryLogger:
         
         merge = (
             tgt_table.alias("t")
-            .merge(query_hist_parsed_df.alias("s"), f"t.query_id = s.query_id and t.query_start_time >= '{start_time}'")
+            .merge(query_hist_parsed_df.alias("s"), f"t.query_id = s.query_id and t.query_start_time >= '{query_start_time}'")
             .whenMatchedUpdateAll()
             .whenNotMatchedInsertAll()
             .execute()
         )
-        self.log(f'Merged data into {self.catalog}.{self.schema}.{self.table}')
+        self.log(f"Merged data into {self.catalog}.{self.schema}.{self.table}. Target table filtered using query_start_time >= '{query_start_time}'")
 
     def optimize(self):
         """Optimize Delta table"""
@@ -203,7 +204,7 @@ class QueryLogger:
         spark.sql(f'optimize {self.catalog}.{self.schema}.{self.table}')
         self.log(f'Optimized table {self.catalog}.{self.schema}.{self.table}')
     
-    def main(self):
+    def run(self):
         """Runs DBSQL query logger pipeline
         
         Target table will be optimized following merge. If running in continuous mode, optimize will be performed every 8 merges. 
@@ -224,16 +225,30 @@ class QueryLogger:
             
             time.sleep(10)
 
-if __name__ == "__main__":
+def main():
+    args = sys.argv[1:]
+    if len(args) < 6:
+      print("Usage: dbsql_query_logger.py catalog, schema, table, pipeline_mode, backfill_period, reset")
+      sys.exit(1)
+    
+    catalog = sys.argv[1]
+    schema = sys.argv[2]
+    table = sys.argv[3]
+    pipeline_mode = sys.argv[4]
+    backfill_period = sys.argv[5]
+    reset = sys.argv[6]
 
     query_logger = QueryLogger(
-        catalog = 'chris_koester',
-        schema = 'observe',
-        table = 'query_history',
-        pipeline_mode = 'triggered',
-        backfill_period = '1 day',
-        reset = 'no'
+        catalog = catalog,
+        schema = schema,
+        table = table,
+        pipeline_mode = pipeline_mode,
+        backfill_period = backfill_period,
+        reset = reset
     )
 
     query_logger.create_target_table()
     query_logger.run()
+
+if __name__ == "__main__":
+    main()

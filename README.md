@@ -2,7 +2,7 @@
 
 Retrieves Databricks SQL (DBSQL) [query history](https://docs.databricks.com/api/workspace/queryhistory/list) and merges it into a Delta Lake table.
 
-A [System Table](https://docs.databricks.com/en/administration-guide/system-tables/index.html) containing similar data is on the Databricks roadmap, so this project will be mostly unecessary in the near future for customers using Unity Catalog and System Tables.
+A [System Table](https://docs.databricks.com/en/administration-guide/system-tables/index.html) containing similar data is on the Databricks roadmap, so solutions like this will be mostly unecessary in the near future.
 
 ## Getting Started
 
@@ -14,7 +14,7 @@ A [System Table](https://docs.databricks.com/en/administration-guide/system-tabl
 ### Usage
 The DBSQL query logger can be used in a variety of ways.
 
-* Add dbsql_query_logger.py module as a workspace file.
+* Add the dbsql_query_logger.py module as a [workspace file](https://docs.databricks.com/en/files/workspace-modules.html).
 * Use a whl to install it on a cluster.
 * A Databricks Workflow can run it using the module or whl.
 

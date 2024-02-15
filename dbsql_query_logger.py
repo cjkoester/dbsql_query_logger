@@ -13,7 +13,7 @@ import sys
 spark = SparkSession.builder.getOrCreate()
 
 class QueryLogger:
-    """Gets DBSQL query history from Databricks API and upserts it to Delta Lake
+    """Gets DBSQL query history from the Databricks API and merges it into a Delta Lake table.
 
     Attributes:
         catalog (str): Catalog name
@@ -33,12 +33,16 @@ class QueryLogger:
         self.reset = reset
 
     def log(self, message: str):
-        """Log with print for now to avoid py4j logger issues"""
+        """Log with print for now to avoid py4j logger issues
+        
+        Args:
+            message (str): Message to log
+        """
 
         print(f'{datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}: {message}')
 
     def create_target_table(self):
-        """Create target Delta Lake table"""
+        """Creates target Delta Lake table"""
     
         create_tbl_stmt = (
             "create or replace table" if self.reset == "yes" else "create table if not exists"
@@ -78,7 +82,14 @@ class QueryLogger:
         self.log(f"Created table {self.catalog}.{self.schema}.{self.table} if it did not already exist.")
     
     def get_time_filter(self):
-        """Get time filters for query history API
+        """Gets time filters for query history API
+        
+        To enable incremental loads, the starting time is obtained in the following order:
+        1. min(query_start_time) of queries in 'QUEUED' or 'RUNNING' status
+        2. max(query_start_time)
+        3. current_date() - backfill_period (Initial loads only)
+
+        The end time is the current timestamp.
         
         Returns:
             tuple[datetime, datetime]: start and end timestamps
@@ -109,7 +120,8 @@ class QueryLogger:
         return start_time, end_time
     
     def get_query_history(self, start_time, end_time, include_metrics: bool = False):
-        """Gets DBSQL query history using the Databricks Python SDK
+        """Gets DBSQL query history using the Databricks Python SDK.
+
         https://docs.databricks.com/api/workspace/queryhistory/list
         
         Args:
@@ -118,7 +130,7 @@ class QueryLogger:
             include_metrics (bool, optional): Whether to include metrics about query. Defaults to False.
         
         Returns:
-            DataFrame: DataFrame containing results from the DBSQL query history API
+            generator: generator containing results from the DBSQL query history API
         """
     
         w = WorkspaceClient()
@@ -138,7 +150,16 @@ class QueryLogger:
         return query_hist_list
     
     def create_dataframe(self, query_hist_list):
-        """Create dataframe from query history API response data"""
+        """Creates dataframe from query history API response data.
+
+        Data is minimally processed. Unix timestamps are converted to a human readable datetime.
+        
+        Args:
+            query_hist_list (generator): generator from the Python SDK WorkspaceClient().query_history.list()
+        
+        Returns:
+            DataFrame: DataFrame containing DBSQL query history
+        """
 
         query_hist_list = (i.as_dict() for i in query_hist_list)
         
@@ -179,9 +200,14 @@ class QueryLogger:
         return query_hist_parsed_df
     
     def load_query_history(self, query_hist_parsed_df, start_time):
-        """Upserts data into Delta table using MERGE. Schema evolution is enabled.
+        """Merges data into a Delta Lake table. Schema evolution is enabled.
         
-        The target table is filtered using >= 'start_time' to reduce the search space for matches and enable file skipping.
+        The target table is filtered using query_start_time >= '{query_start_time}' to reduce the search space for matches and enable file skipping.
+        This optimization is possible because the source data (With the exception of the initial load) will only contain updates for queries that were previously in progress.
+        
+        Args:
+            query_hist_parsed_df (DataFrame): DataFrame containing DBSQL query history
+            start_time (int): Unix timestamp in milliseconds
         """
 
         spark.conf.set('spark.databricks.delta.schema.autoMerge.enabled', True)
@@ -199,13 +225,19 @@ class QueryLogger:
         self.log(f"Merged data into {self.catalog}.{self.schema}.{self.table}. Target table filtered using query_start_time >= '{query_start_time}'")
 
     def optimize(self):
-        """Optimize Delta table"""
+        """Optimizes Delta Lake table
+        
+        The target table uses Liquid Clustering by default. If ZORDER is used, update the optimize command below to include ZORDER columns.
+        """
 
         spark.sql(f'optimize {self.catalog}.{self.schema}.{self.table}')
         self.log(f'Optimized table {self.catalog}.{self.schema}.{self.table}')
     
-    def run(self):
+    def run(self, trigger_interval: int = 30):
         """Runs DBSQL query logger pipeline
+
+        Args:
+            trigger_interval (int): number of seconds to wait between each run in continuous mode. Defaults to 30 seconds.
         
         Target table will be optimized following merge. If running in continuous mode, optimize will be performed every 8 merges. 
         """
@@ -223,9 +255,11 @@ class QueryLogger:
                 self.optimize()
                 break
             
-            time.sleep(10)
+            time.sleep(trigger_interval)
 
 def main():
+    """Used as entry point to run module from the command line with arguments"""
+
     args = sys.argv[1:]
     if len(args) < 6:
       print("Usage: dbsql_query_logger.py catalog, schema, table, pipeline_mode, backfill_period, reset")

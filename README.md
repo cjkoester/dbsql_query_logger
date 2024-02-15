@@ -17,8 +17,3 @@ The DBSQL query logger can be used in a variety of ways.
 * Add the dbsql_query_logger.py module as a [workspace file](https://docs.databricks.com/en/files/workspace-modules.html).
 * Use a whl to install it on a cluster.
 * A Databricks Workflow can run it using the module or whl.
-
-## Roadmap
-
-* Improve documentation in README
-* Publish whl

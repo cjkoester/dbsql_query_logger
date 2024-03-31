@@ -273,12 +273,12 @@ class QueryLogger:
         spark.sql(f'optimize {self.catalog}.{self.schema}.{self.table}')
         logger.info(f'Optimized table {self.catalog}.{self.schema}.{self.table}')
     
-    def run(self, filter_current_user: bool = False, incremental_load: bool = False, trigger_interval: int = 30) -> None:
+    def run(self, filter_current_user: bool = False, incremental_load: bool = True, trigger_interval: int = 30) -> None:
         """Runs DBSQL query logger pipeline
 
         Args:
             filter_current_user (bool): If set to true, only queries for the current user will be retrieved. Defaults to false.
-            incremental_load (bool): If set to true, data retrieval will be incremental. Defaults to false.
+            incremental_load (bool): If set to true, data retrieval will be incremental. Defaults to true.
             trigger_interval (int): number of seconds to wait between each run in continuous mode. Defaults to 30 seconds.
         
         Target table will be optimized following merge. If running in continuous mode, optimize will be performed every 8 merges. 
@@ -340,7 +340,7 @@ def main() -> None:
         reset = reset
     )
 
-    query_logger.run(filter_current_user=False, incremental_load=True)
+    query_logger.run()
 
 if __name__ == "__main__":
     logging.basicConfig(

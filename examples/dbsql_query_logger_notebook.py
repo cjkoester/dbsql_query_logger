@@ -27,5 +27,4 @@ query_logger = QueryLogger(
     reset = dbutils.widgets.get('reset')
 )
 
-query_logger.create_target_table()
 query_logger.run()

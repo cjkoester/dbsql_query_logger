@@ -23,14 +23,14 @@ class QueryLogger:
         catalog (str): Catalog name
         schema (str): Schema name
         table (str): Table name
-        start_time (datetime): Limit results to queries that started after this time
-        end_time (datetime): Limit results to queries that started before this time
-        user_ids (list): A list of user IDs who ran the queries
-        warehouse_ids (list): A list of warehouse IDs
-        include_metrics (bool): Whether to include metrics about query
-        pipeline_mode (str): If set to 'triggered', code will load data and exit. Otherwise it will load data every 10 seconds. 
-        backfill_period (str): Controls how far back to look for the initial data load
-        reset (str): If set to 'yes', the target table will be replaced
+        start_time (Optional[datetime]): Limit results to queries that started after this time
+        end_time (Optional[datetime]): Limit results to queries that started before this time
+        user_ids (Optional[list[int]]): A list of user IDs who ran the queries
+        warehouse_ids (Optional[list[str]]): A list of warehouse IDs
+        include_metrics (bool): Whether to include metrics about query. Defaults to True.
+        pipeline_mode (str): If set to 'triggered', code will load data and exit. Otherwise it will load data every 10 seconds. Defaults to 'triggered'.
+        backfill_period (str): Controls how far back to look for the initial data load. Defaults to '7 days'.
+        reset (str): If set to 'yes', the target table will be replaced. Defaults to 'no'.
         additional_cols (dict): Dictionary of additional columns. Provide the column name as the key, and a SQL expression for the value.
     """
 
@@ -315,7 +315,7 @@ def main() -> None:
     """Used as entry point to run module from the command line with arguments
     
     The main function is intended for incremental bulk collection and doesn't support all arguments.
-    Additional arguments can be added as needed.
+    Support for additional arguments can be added as needed.
     """
 
     args = sys.argv[1:]

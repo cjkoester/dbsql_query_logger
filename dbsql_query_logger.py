@@ -49,18 +49,18 @@ class QueryLogger:
         reset: str = 'no',
         additional_cols: Optional[dict] = None
     ):
-        if catalog is not None:
+        if catalog not in(None, ''):
             self.catalog = catalog
         else:
-            raise Exception("catalog cannot be None")
-        if schema is not None:
+            raise Exception("A catalog is required but was not provided")
+        if schema not in(None, ''):
             self.schema = schema
         else:
-            raise Exception("schema cannot be None")
-        if table is not None:
+            raise Exception("A schema is required but was not provided")
+        if table not in(None, ''):
             self.table = table
         else:
-            raise Exception("table cannot be None")
+            raise Exception("A table is required but was not provided")
         self.schema = schema
         self.table = table
         self.start_time = start_time
@@ -347,7 +347,7 @@ if __name__ == "__main__":
         format="%(asctime)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z"
     )
-
+    
     logger = logging.getLogger('dbsql_query_runner')
     logger.setLevel(logging.INFO)
     

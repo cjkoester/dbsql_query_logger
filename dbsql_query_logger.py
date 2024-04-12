@@ -168,7 +168,9 @@ class QueryLogger:
         
         start_time_ms = int(self.start_time.timestamp() * 1000)
         end_time_ms = int(self.end_time.timestamp() * 1000)
-    
+        
+        logger.info(f'Retrieving query history. This can take a while with larger data volumes.')
+
         query_hist_list = self.w.query_history.list(
             include_metrics=self.include_metrics,
             max_results=1000,
@@ -254,6 +256,8 @@ class QueryLogger:
         if self.start_time is None:
             raise RuntimeError('start_time variable cannot be None. It must be provided when creating a QueryLogger instance or set by _get_time_filter() when incremental_load=True in run().')
         query_start_time = self.start_time.strftime("%Y-%m-%d")
+
+        logger.info(f"Merging data into {self.catalog}.{self.schema}.{self.table}. Target table filtered using query_start_time >= '{query_start_time}' to optimize the merge.")
         
         merge = (
             tgt_table.alias("t")
@@ -262,7 +266,8 @@ class QueryLogger:
             .whenNotMatchedInsertAll()
             .execute()
         )
-        logger.info(f"Merged data into {self.catalog}.{self.schema}.{self.table}. Target table filtered using query_start_time >= '{query_start_time}' to optimize the merge.")
+
+        logger.info(f"Merge completed")
 
     def optimize(self) -> None:
         """Optimize Delta Lake table

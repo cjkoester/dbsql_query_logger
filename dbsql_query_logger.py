@@ -1,48 +1,87 @@
-from datetime import datetime, timezone
+import sys
 import time
+import logging
+import itertools
+from datetime import datetime, timezone
+from typing import Iterator, Optional
 from delta.tables import DeltaTable
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType, StructField, StringType, LongType, MapType, BooleanType
 import pyspark.sql.functions as F
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import QueryFilter
+from databricks.sdk.service.sql import QueryFilter, QueryInfo
 from databricks.sdk.service.sql import TimeRange
-import itertools
-import sys
+from databricks.connect.session import DatabricksSession
 
-spark = SparkSession.builder.getOrCreate()
+spark = DatabricksSession.builder.getOrCreate()
+logger = logging.getLogger(__name__)
 
 class QueryLogger:
     """Gets DBSQL query history from the Databricks API and merges it into a Delta Lake table.
 
     Attributes:
-        catalog (str): Catalog name
-        schema (str): Schema name
-        table (str): Table name
-        pipeline_mode (str): If set to 'triggered', code will load data and exit. Otherwise it will load data every 10 seconds. 
-        backfill_period (str): Controls how far back to look for the initial data load.
-        reset (str): If set to 'yes', the target table will be replaced.
+        catalog (str): Catalog name  
+        schema (str): Schema name  
+        table (str): Table name  
+        start_time (Optional[datetime]): Limit results to queries that started after this time  
+        end_time (Optional[datetime]): Limit results to queries that started before this time  
+        user_ids (Optional[list[int]]): A list of user IDs who ran the queries  
+        warehouse_ids (Optional[list[str]]): A list of warehouse IDs  
+        include_metrics (bool): Whether to include metrics about query. Defaults to True.  
+        pipeline_mode (str): If set to 'triggered', will load data and exit.  
+            Otherwise will load data every 10 seconds. Defaults to 'triggered'.  
+        backfill_period (str): Controls how far back to look for the initial load.  
+            Defaults to '7 days'.  
+        reset (str): If set to 'yes', the target table will be replaced. Defaults to 'no'.  
+        additional_cols (dict): Dictionary of additional columns. Provide the column name  
+            as the key, and a SQL expression for the value.  
     """
 
-    def __init__(self, catalog: str, schema: str, table: str, pipeline_mode: str, backfill_period: str, reset: str):
-        self.catalog = catalog
+    def __init__(
+        self,
+        catalog: str,
+        schema: str,
+        table: str,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        user_ids: Optional[list[int]] = None,
+        warehouse_ids: Optional[list[str]] = None,
+        include_metrics: bool = True,
+        pipeline_mode: str = 'triggered',
+        backfill_period: str = '7 days',
+        reset: str = 'no',
+        additional_cols: Optional[dict] = None
+    ):
+        if catalog not in(None, ''):
+            self.catalog = catalog
+        else:
+            raise Exception("A catalog is required but was not provided")
+        if schema not in(None, ''):
+            self.schema = schema
+        else:
+            raise Exception("A schema is required but was not provided")
+        if table not in(None, ''):
+            self.table = table
+        else:
+            raise Exception("A table is required but was not provided")
         self.schema = schema
         self.table = table
+        self.start_time = start_time
+        self.end_time = end_time
+        self.user_ids = user_ids
+        self.warehouse_ids = warehouse_ids
+        self.include_metrics = include_metrics
         self.pipeline_mode = pipeline_mode
         self.backfill_period = backfill_period
         self.reset = reset
+        self.additional_cols = additional_cols
+        self.w = WorkspaceClient()
 
-    def log(self, message: str):
-        """Log with print for now to avoid py4j logger issues
-        
-        Args:
-            message (str): Message to log
-        """
+    def create_target_table(self) -> None:
+        """Creates target Delta Lake table."""
 
-        print(f'{datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}: {message}')
-
-    def create_target_table(self):
-        """Creates target Delta Lake table"""
+        spark.sql(f'use catalog {self.catalog}')
+        spark.sql(f'create schema if not exists {self.schema}')
     
         create_tbl_stmt = (
             "create or replace table" if self.reset == "yes" else "create table if not exists"
@@ -51,26 +90,26 @@ class QueryLogger:
         spark.sql(
             f"""
                 {create_tbl_stmt} {self.catalog}.{self.schema}.{self.table} (
-                    query_id STRING,
-                    status STRING,
-                    query_text STRING,
-                    query_start_time TIMESTAMP,
-                    execution_end_time TIMESTAMP,
-                    query_end_time TIMESTAMP,
-                    user_id BIGINT,
-                    user_name STRING,
-                    spark_ui_url STRING,
-                    warehouse_id STRING,
-                    error_message STRING,
-                    rows_produced BIGINT,
-                    metrics MAP <STRING,STRING>,
-                    is_final BOOLEAN,
-                    channel_used MAP <STRING,STRING>,
-                    duration BIGINT,
-                    executed_as_user_id BIGINT,
-                    executed_as_user_name STRING,
-                    plans_state STRING,
-                    statement_type STRING
+                  query_id STRING comment 'The query ID.',
+                  status STRING comment 'Query status with one the following values:\n- `QUEUED`: Query has been received and queued.\n- `RUNNING`: Query has started.\n- `CANCELED`: Query has been cancelled by the user.\n- `FAILED`: Query has failed.\n- `FINISHED`: Query has completed.',
+                  query_text STRING comment 'The text of the query.',
+                  query_start_time TIMESTAMP comment 'The time the query started.',
+                  execution_end_time TIMESTAMP comment 'The time execution of the query ended.',
+                  query_end_time TIMESTAMP comment 'The time the query ended.',
+                  user_id BIGINT comment 'The ID of the user who ran the query.',
+                  user_name STRING comment 'The email address or username of the user who ran the query.',
+                  spark_ui_url STRING comment 'URL to the query plan in the Spark UI. For advanced troubleshooting.',
+                  warehouse_id STRING comment 'Warehouse ID.',
+                  error_message STRING comment 'Message describing why the query could not complete.',
+                  rows_produced BIGINT comment 'The number of results returned by the query.',
+                  metrics MAP <STRING, STRING> comment 'Metrics about query execution. See the [API documentation](https://docs.databricks.com/api/workspace/queryhistory/list#res-metrics) for descriptions of available metrics.',
+                  is_final BOOLEAN comment 'Whether more updates for the query are expected.',
+                  channel_used MAP <STRING, STRING> comment 'Channel information for the SQL warehouse at the time of query execution.',
+                  duration BIGINT comment 'Total execution time of the query from the client’s point of view, in milliseconds.',
+                  executed_as_user_id BIGINT comment 'The ID of the user whose credentials were used to run the query.',
+                  executed_as_user_name STRING comment 'The email address or username of the user whose credentials were used to run the query.',
+                  plans_state STRING comment 'Whether plans exist for the execution, or the reason why they are missing. Potential values are `IGNORED_SMALL_DURATION | IGNORED_LARGE_PLANS_SIZE | EXISTS | UNKNOWN | EMPTY | IGNORED_SPARK_PLAN_TYPE`',
+                  statement_type STRING comment 'Type of statement. Potential values are `OTHER | ALTER | ANALYZE | COPY | CREATE | DELETE | DESCRIBE | DROP | EXPLAIN | GRANT | INSERT | MERGE | OPTIMIZE | REFRESH | REPLACE | REVOKE | SELECT | SET | SHOW | TRUNCATE | UPDATE | USE`'
                 )
                 using delta cluster by (query_start_time)
                 tblproperties (
@@ -79,20 +118,17 @@ class QueryLogger:
             """
         )
         
-        self.log(f"Created table {self.catalog}.{self.schema}.{self.table} if it did not already exist.")
+        logger.info(f"Created table {self.catalog}.{self.schema}.{self.table} if it did not already exist.")
     
-    def get_time_filter(self):
-        """Gets time filters for query history API
+    def _get_time_filter(self) -> None:
+        """Gets time filters for query history API.
         
-        To enable incremental loads, the starting time is obtained in the following order:
-        1. min(query_start_time) of queries in 'QUEUED' or 'RUNNING' status
+        To enable incremental loads, the starting time is obtained from the query_history table in the following order:
+        1. min(query_start_time) of queries in 'QUEUED' or 'RUNNING' status within the past 3 days
         2. max(query_start_time)
         3. current_date() - backfill_period (Initial loads only)
 
         The end time is the current timestamp.
-        
-        Returns:
-            tuple[datetime, datetime]: start and end timestamps
         """
 
         start_time_query = f"""
@@ -105,6 +141,7 @@ class QueryLogger:
                     {self.catalog}.{self.schema}.{self.table}
                   where
                     status in ('QUEUED', 'RUNNING')
+                    and query_start_time >= current_date() - interval 3 days
                 ),
                 max(query_start_time),
                 current_date() - interval {self.backfill_period}
@@ -113,34 +150,36 @@ class QueryLogger:
               {self.catalog}.{self.schema}.{self.table}
         """
         
-        start_time = spark.sql(start_time_query).collect()[0][0]
-        end_time = datetime.now(tz=timezone.utc)
+        self.start_time = spark.sql(start_time_query).collect()[0][0]
+        self.end_time = datetime.now(tz=timezone.utc)
         
-        self.log(f'API filter start time: {start_time.strftime("%Y-%m-%d %H:%M:%S")}, end time: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
-        return start_time, end_time
+        logger.info(f'API filter start time: {self.start_time.strftime("%Y-%m-%d %H:%M:%S")}, end time: {self.end_time.strftime("%Y-%m-%d %H:%M:%S")}')
     
-    def get_query_history(self, start_time, end_time, include_metrics: bool = False):
+    def get_query_history(self) -> Iterator[QueryInfo]:
         """Gets DBSQL query history using the Databricks Python SDK.
 
         https://docs.databricks.com/api/workspace/queryhistory/list
         
-        Args:
-            start_time (datetime): Limit results to queries that started after this time.
-            end_time (datetime): Limit results to queries that started before this time.
-            include_metrics (bool, optional): Whether to include metrics about query. Defaults to False.
-        
-        Returns:
-            generator: generator containing results from the DBSQL query history API
+        Yields:
+            Iterator[QueryInfo]: generator containing results from the DBSQL query history API
         """
-    
-        w = WorkspaceClient()
-        start_time_ms = int(start_time.timestamp() * 1000)
-        end_time_ms = int(end_time.timestamp() * 1000)
-    
-        query_hist_list = w.query_history.list(
-            include_metrics=include_metrics,
+        
+        if self.start_time is None:
+            raise RuntimeError('start_time variable cannot be None. It must be provided when creating a QueryLogger instance or set by _get_time_filter() when incremental_load=True in run().')
+        if self.end_time is None:
+            raise RuntimeError('end_time variable cannot be None. It must be provided when creating a QueryLogger instance or set by _get_time_filter() when incremental_load=True in run().')
+        
+        start_time_ms = int(self.start_time.timestamp() * 1000)
+        end_time_ms = int(self.end_time.timestamp() * 1000)
+        
+        logger.info(f'Retrieving query history. This can take a while with larger data volumes.')
+
+        query_hist_list = self.w.query_history.list(
+            include_metrics=self.include_metrics,
             max_results=1000,
             filter_by = QueryFilter(
+                user_ids=self.user_ids,
+                warehouse_ids=self.warehouse_ids,
                 query_start_time_range = TimeRange(
                     start_time_ms=start_time_ms, end_time_ms=end_time_ms
                 )
@@ -149,7 +188,7 @@ class QueryLogger:
 
         return query_hist_list
     
-    def create_dataframe(self, query_hist_list):
+    def create_dataframe(self, query_hist_list) -> DataFrame:
         """Creates dataframe from query history API response data.
 
         Data is minimally processed. Unix timestamps are converted to a human readable datetime.
@@ -197,9 +236,14 @@ class QueryLogger:
             .withColumn("query_end_time", F.expr("to_timestamp(query_end_time_ms / 1000)"))
             .drop(*['query_start_time_ms', 'query_end_time_ms', 'execution_end_time_ms'])
         )
+        
+        if self.additional_cols: 
+            for k,v in self.additional_cols.items():
+                query_hist_parsed_df = query_hist_parsed_df.withColumn(k, F.expr(f"{v}"))
+        
         return query_hist_parsed_df
     
-    def load_query_history(self, query_hist_parsed_df, start_time):
+    def load_query_history(self, query_hist_parsed_df: DataFrame) -> None:
         """Merges data into a Delta Lake table. Schema evolution is enabled.
         
         The target table is filtered using query_start_time >= '{query_start_time}' to reduce the search space for matches and enable file skipping.
@@ -207,13 +251,16 @@ class QueryLogger:
         
         Args:
             query_hist_parsed_df (DataFrame): DataFrame containing DBSQL query history
-            start_time (int): Unix timestamp in milliseconds
         """
 
         spark.conf.set('spark.databricks.delta.schema.autoMerge.enabled', True)
         tgt_table = DeltaTable.forName(spark, f'{self.catalog}.{self.schema}.{self.table}')
-    
-        query_start_time = start_time.strftime("%Y-%m-%d")
+        
+        if self.start_time is None:
+            raise RuntimeError('start_time variable cannot be None. It must be provided when creating a QueryLogger instance or set by _get_time_filter() when incremental_load=True in run().')
+        query_start_time = self.start_time.strftime("%Y-%m-%d")
+
+        logger.info(f"Merging data into {self.catalog}.{self.schema}.{self.table}. Target table filtered using query_start_time >= '{query_start_time}' to optimize the merge.")
         
         merge = (
             tgt_table.alias("t")
@@ -222,34 +269,52 @@ class QueryLogger:
             .whenNotMatchedInsertAll()
             .execute()
         )
-        self.log(f"Merged data into {self.catalog}.{self.schema}.{self.table}. Target table filtered using query_start_time >= '{query_start_time}'")
 
-    def optimize(self):
-        """Optimizes Delta Lake table
+        logger.info(f"Merge completed")
+
+    def optimize(self) -> None:
+        """Optimize Delta Lake table.
         
         The target table uses Liquid Clustering by default. If ZORDER is used, update the optimize command below to include ZORDER columns.
         """
 
         spark.sql(f'optimize {self.catalog}.{self.schema}.{self.table}')
-        self.log(f'Optimized table {self.catalog}.{self.schema}.{self.table}')
+        logger.info(f'Optimized table {self.catalog}.{self.schema}.{self.table}')
     
-    def run(self, trigger_interval: int = 30):
-        """Runs DBSQL query logger pipeline
+    def run(self, filter_current_user: bool = False, incremental_load: bool = True, trigger_interval: int = 30) -> None:
+        """Runs DBSQL query logger pipeline.
 
         Args:
-            trigger_interval (int): number of seconds to wait between each run in continuous mode. Defaults to 30 seconds.
+            filter_current_user (bool): If set to true, only queries for the current user will be retrieved.  
+                Defaults to false.  
+            incremental_load (bool): If set to true, data retrieval will be incremental.  
+                Defaults to true.  
+            trigger_interval (int): number of seconds to wait between each run in continuous mode.  
+                Defaults to 30 seconds.  
         
         Target table will be optimized following merge. If running in continuous mode, optimize will be performed every 8 merges. 
         """
+        
+        self.create_target_table()
 
+        if filter_current_user:
+            current_user = self.w.current_user.me()
+            current_user_id = int(current_user.id or 0) # Default to 0 to avoid None
+            if current_user_id == 0:
+                raise RuntimeError('Failed to get current user')
+            logger.info(f'Filtering to current user id {current_user.user_name}')
+            self.user_ids = [current_user_id]
+        
         for i in itertools.count(start=1):
             if i % 8 == 0:
                 self.optimize()
             
-            start_time, end_time = self.get_time_filter()
-            query_hist = self.get_query_history(start_time, end_time, include_metrics=True)
+            if incremental_load:
+                self._get_time_filter()
+            
+            query_hist = self.get_query_history()
             query_hist_df = self.create_dataframe(query_hist)
-            self.load_query_history(query_hist_df, start_time)
+            self.load_query_history(query_hist_df)
             
             if self.pipeline_mode == 'triggered':
                 self.optimize()
@@ -257,13 +322,25 @@ class QueryLogger:
             
             time.sleep(trigger_interval)
 
-def main():
-    """Used as entry point to run module from the command line with arguments"""
+def main() -> None:
+    """Used as entry point to run module from the command line with arguments.
+    
+    The main function is intended for incremental bulk collection and doesn't support all arguments.
+    Support for additional arguments can be added as needed.
+    """
+
+    logging.basicConfig(
+        format="%(asctime)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z"
+    )
+    
+    logger.setLevel(logging.INFO)
 
     args = sys.argv[1:]
     if len(args) < 6:
-      print("Usage: dbsql_query_logger.py catalog, schema, table, pipeline_mode, backfill_period, reset")
-      sys.exit(1)
+        print("Incorrect number of arguments provided")
+        print("Usage: dbsql_query_logger.py catalog, schema, table, pipeline_mode, backfill_period, reset")
+        sys.exit(1)
     
     catalog = sys.argv[1]
     schema = sys.argv[2]
@@ -281,7 +358,6 @@ def main():
         reset = reset
     )
 
-    query_logger.create_target_table()
     query_logger.run()
 
 if __name__ == "__main__":

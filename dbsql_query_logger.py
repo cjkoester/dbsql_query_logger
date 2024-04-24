@@ -20,18 +20,21 @@ class QueryLogger:
     """Gets DBSQL query history from the Databricks API and merges it into a Delta Lake table.
 
     Attributes:
-        catalog (str): Catalog name
-        schema (str): Schema name
-        table (str): Table name
-        start_time (Optional[datetime]): Limit results to queries that started after this time
-        end_time (Optional[datetime]): Limit results to queries that started before this time
-        user_ids (Optional[list[int]]): A list of user IDs who ran the queries
-        warehouse_ids (Optional[list[str]]): A list of warehouse IDs
-        include_metrics (bool): Whether to include metrics about query. Defaults to True.
-        pipeline_mode (str): If set to 'triggered', code will load data and exit. Otherwise it will load data every 10 seconds. Defaults to 'triggered'.
-        backfill_period (str): Controls how far back to look for the initial data load. Defaults to '7 days'.
-        reset (str): If set to 'yes', the target table will be replaced. Defaults to 'no'.
-        additional_cols (dict): Dictionary of additional columns. Provide the column name as the key, and a SQL expression for the value.
+        catalog (str): Catalog name  
+        schema (str): Schema name  
+        table (str): Table name  
+        start_time (Optional[datetime]): Limit results to queries that started after this time  
+        end_time (Optional[datetime]): Limit results to queries that started before this time  
+        user_ids (Optional[list[int]]): A list of user IDs who ran the queries  
+        warehouse_ids (Optional[list[str]]): A list of warehouse IDs  
+        include_metrics (bool): Whether to include metrics about query. Defaults to True.  
+        pipeline_mode (str): If set to 'triggered', will load data and exit.  
+            Otherwise will load data every 10 seconds. Defaults to 'triggered'.  
+        backfill_period (str): Controls how far back to look for the initial load.  
+            Defaults to '7 days'.  
+        reset (str): If set to 'yes', the target table will be replaced. Defaults to 'no'.  
+        additional_cols (dict): Dictionary of additional columns. Provide the column name  
+            as the key, and a SQL expression for the value.  
     """
 
     def __init__(
@@ -75,7 +78,7 @@ class QueryLogger:
         self.w = WorkspaceClient()
 
     def create_target_table(self) -> None:
-        """Creates target Delta Lake table"""
+        """Creates target Delta Lake table."""
 
         spark.sql(f'use catalog {self.catalog}')
         spark.sql(f'create schema if not exists {self.schema}')
@@ -87,26 +90,26 @@ class QueryLogger:
         spark.sql(
             f"""
                 {create_tbl_stmt} {self.catalog}.{self.schema}.{self.table} (
-                    query_id STRING,
-                    status STRING,
-                    query_text STRING,
-                    query_start_time TIMESTAMP,
-                    execution_end_time TIMESTAMP,
-                    query_end_time TIMESTAMP,
-                    user_id BIGINT,
-                    user_name STRING,
-                    spark_ui_url STRING,
-                    warehouse_id STRING,
-                    error_message STRING,
-                    rows_produced BIGINT,
-                    metrics MAP <STRING,STRING>,
-                    is_final BOOLEAN,
-                    channel_used MAP <STRING,STRING>,
-                    duration BIGINT,
-                    executed_as_user_id BIGINT,
-                    executed_as_user_name STRING,
-                    plans_state STRING,
-                    statement_type STRING
+                  query_id STRING comment 'The query ID.',
+                  status STRING comment 'Query status with one the following values:\n- `QUEUED`: Query has been received and queued.\n- `RUNNING`: Query has started.\n- `CANCELED`: Query has been cancelled by the user.\n- `FAILED`: Query has failed.\n- `FINISHED`: Query has completed.',
+                  query_text STRING comment 'The text of the query.',
+                  query_start_time TIMESTAMP comment 'The time the query started.',
+                  execution_end_time TIMESTAMP comment 'The time execution of the query ended.',
+                  query_end_time TIMESTAMP comment 'The time the query ended.',
+                  user_id BIGINT comment 'The ID of the user who ran the query.',
+                  user_name STRING comment 'The email address or username of the user who ran the query.',
+                  spark_ui_url STRING comment 'URL to the query plan in the Spark UI. For advanced troubleshooting.',
+                  warehouse_id STRING comment 'Warehouse ID.',
+                  error_message STRING comment 'Message describing why the query could not complete.',
+                  rows_produced BIGINT comment 'The number of results returned by the query.',
+                  metrics MAP <STRING, STRING> comment 'Metrics about query execution. See the [API documentation](https://docs.databricks.com/api/workspace/queryhistory/list#res-metrics) for descriptions of available metrics.',
+                  is_final BOOLEAN comment 'Whether more updates for the query are expected.',
+                  channel_used MAP <STRING, STRING> comment 'Channel information for the SQL warehouse at the time of query execution.',
+                  duration BIGINT comment 'Total execution time of the query from the client’s point of view, in milliseconds.',
+                  executed_as_user_id BIGINT comment 'The ID of the user whose credentials were used to run the query.',
+                  executed_as_user_name STRING comment 'The email address or username of the user whose credentials were used to run the query.',
+                  plans_state STRING comment 'Whether plans exist for the execution, or the reason why they are missing. Potential values are `IGNORED_SMALL_DURATION | IGNORED_LARGE_PLANS_SIZE | EXISTS | UNKNOWN | EMPTY | IGNORED_SPARK_PLAN_TYPE`',
+                  statement_type STRING comment 'Type of statement. Potential values are `OTHER | ALTER | ANALYZE | COPY | CREATE | DELETE | DESCRIBE | DROP | EXPLAIN | GRANT | INSERT | MERGE | OPTIMIZE | REFRESH | REPLACE | REVOKE | SELECT | SET | SHOW | TRUNCATE | UPDATE | USE`'
                 )
                 using delta cluster by (query_start_time)
                 tblproperties (
@@ -118,7 +121,7 @@ class QueryLogger:
         logger.info(f"Created table {self.catalog}.{self.schema}.{self.table} if it did not already exist.")
     
     def _get_time_filter(self) -> None:
-        """Gets time filters for query history API
+        """Gets time filters for query history API.
         
         To enable incremental loads, the starting time is obtained from the query_history table in the following order:
         1. min(query_start_time) of queries in 'QUEUED' or 'RUNNING' status within the past 3 days
@@ -270,7 +273,7 @@ class QueryLogger:
         logger.info(f"Merge completed")
 
     def optimize(self) -> None:
-        """Optimize Delta Lake table
+        """Optimize Delta Lake table.
         
         The target table uses Liquid Clustering by default. If ZORDER is used, update the optimize command below to include ZORDER columns.
         """
@@ -279,12 +282,15 @@ class QueryLogger:
         logger.info(f'Optimized table {self.catalog}.{self.schema}.{self.table}')
     
     def run(self, filter_current_user: bool = False, incremental_load: bool = True, trigger_interval: int = 30) -> None:
-        """Runs DBSQL query logger pipeline
+        """Runs DBSQL query logger pipeline.
 
         Args:
-            filter_current_user (bool): If set to true, only queries for the current user will be retrieved. Defaults to false.
-            incremental_load (bool): If set to true, data retrieval will be incremental. Defaults to true.
-            trigger_interval (int): number of seconds to wait between each run in continuous mode. Defaults to 30 seconds.
+            filter_current_user (bool): If set to true, only queries for the current user will be retrieved.  
+                Defaults to false.  
+            incremental_load (bool): If set to true, data retrieval will be incremental.  
+                Defaults to true.  
+            trigger_interval (int): number of seconds to wait between each run in continuous mode.  
+                Defaults to 30 seconds.  
         
         Target table will be optimized following merge. If running in continuous mode, optimize will be performed every 8 merges. 
         """
@@ -298,7 +304,7 @@ class QueryLogger:
                 raise RuntimeError('Failed to get current user')
             logger.info(f'Filtering to current user id {current_user.user_name}')
             self.user_ids = [current_user_id]
-
+        
         for i in itertools.count(start=1):
             if i % 8 == 0:
                 self.optimize()
@@ -317,11 +323,18 @@ class QueryLogger:
             time.sleep(trigger_interval)
 
 def main() -> None:
-    """Used as entry point to run module from the command line with arguments
+    """Used as entry point to run module from the command line with arguments.
     
     The main function is intended for incremental bulk collection and doesn't support all arguments.
     Support for additional arguments can be added as needed.
     """
+
+    logging.basicConfig(
+        format="%(asctime)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z"
+    )
+    
+    logger.setLevel(logging.INFO)
 
     args = sys.argv[1:]
     if len(args) < 6:
@@ -348,12 +361,4 @@ def main() -> None:
     query_logger.run()
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        format="%(asctime)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z"
-    )
-    
-    logger = logging.getLogger('dbsql_query_runner')
-    logger.setLevel(logging.INFO)
-    
     main()
